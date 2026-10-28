@@ -1,0 +1,2 @@
+# Dependencia de desarrollo para ejecutar las pruebas.
+pytest
