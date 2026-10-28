@@ -1,12 +1,12 @@
-# Decisiones de diseño — etapa 3
+# Decisiones de diseño — etapa 4
 
 ## Arquitectura propuesta
 
 Se separan las responsabilidades en módulos pequeños del paquete `motor_ast`.
 La CLI quedará en la raíz y delegará el trabajo al paquete. Esta división facilita
 comprender, probar y explicar cada transformación durante la defensa del trabajo.
-El extractor y el normalizador están implementados; los demás módulos documentan sus
-responsabilidades futuras.
+El extractor, el normalizador y el serializador están implementados; los demás
+módulos documentan sus responsabilidades futuras.
 
 | Archivo | Responsabilidad prevista |
 | --- | --- |
@@ -130,23 +130,77 @@ No se afirma que todas las construcciones avanzadas puedan regenerarse o
 compilarse tras sustituir sus constantes. La transformación está orientada a
 funciones con los nodos habituales de asignación, operaciones, control y llamadas.
 
-### Relación con la teoría y validación
+## Serialización implementada
 
-Normalizar es transformar representaciones sintácticas hacia una forma común.
-Dos textos que difieren en identificadores o valores pueden conservar los mismos
-patrones de nodos y producir árboles normalizados equivalentes. Se pierde la
-información concreta de esos nombres y literales, pero se conservan `BinOp`,
-`If`, `Return` y otros nodos que describen la estructura a comparar.
+### Recorrido pre-order y algoritmo
 
-Recorrer significa visitar nodos; transformar añade cambios en nodos o campos.
-Esto se relaciona con traducción dirigida por la sintaxis: las reglas se aplican
-según el tipo de nodo del árbol generado por el análisis sintáctico de Python.
-La normalización no demuestra que dos funciones hagan lo mismo.
+La función `serializar_ast()` recibe un nodo AST (típicamente una función normalizada)
+y genera una lista plana de strings mediante un recorrido recursivo pre-order:
 
-Las pruebas comparan `ast.dump()` y verifican equivalencias, diferencias entre
-operadores, independencia del original, determinismo, integración con extracción
-y la política de identificadores. `python -m motor_ast.normalizador` muestra los
-ejemplos reales sin implementar serialización ni búsqueda.
+1. **Visita del nodo actual**: se genera el token representativo del nodo raíz del
+   subárbol mediante `_token_de_nodo()`.
+2. **Recorrido recursivo de los hijos**: se itera ordenadamente sobre los nodos hijos
+   usando `ast.iter_child_nodes()`, que recorre los subnodos sintácticos de izquierda
+   a derecha según el orden natural del AST.
+
+No se utiliza `ast.walk()`, dado que dicho iterador no garantiza un orden topológico
+ni pre-order determinista entre hermanos y niveles del árbol.
+
+### Representación de tokens
+
+Se adopta una representación consistente y legible:
+
+- **Nodos con valores normalizados relevantes**:
+  - `Name`: se emite `Name:<id>` (por ejemplo `Name:VAR1`, `Name:VAR2`).
+  - `arg`: se emite `arg:<nombre>` (por ejemplo `arg:VAR1`).
+  - `Constant`: se emite `Constant:<valor>` (por ejemplo `Constant:LIT`, `Constant:True`, `Constant:None`).
+- **Definiciones de función**:
+  - Tanto `FunctionDef` como `AsyncFunctionDef` emiten únicamente el nombre de su tipo de
+    nodo (`FunctionDef` o `AsyncFunctionDef`). De esta manera, el nombre original o el
+    marcador `FUNC` no se introduce como token, cumpliendo la pauta de que el nombre de
+    la función no influye en la comparación.
+- **Demás nodos sintácticos**:
+  - Se emite el nombre exacto de la clase del nodo (`type(nodo).__name__`), como `BinOp`,
+    `Add`, `Sub`, `Mult`, `Return`, `If`, `For`, `While`, `Compare`, `Eq`, `Gt`, `Assign`,
+    `Call`, `arguments`, `Load`, `Store`, `Attribute`, `keyword`, etc.
+
+### Información conservada vs. información omitida
+
+- **Se conserva**:
+  - La jerarquía y orden secuencial de todas las instrucciones y expresiones.
+  - La diferenciación de operadores (`Add` vs `Sub` vs `Mult`).
+  - Las estructuras de control (`If` vs `For` vs `While`).
+  - La correspondencia de variables normalizadas (`VAR1`, `VAR2`, etc.).
+  - Las repeticiones y la frecuencia exacta de cada token (no se emplean conjuntos).
+  - Los contextos de acceso sintáctico (`Load`, `Store`).
+- **Se omite**:
+  - Nombres originales de variables, parámetros y funciones.
+  - Valores literales originales (números y cadenas de texto reemplazados por `LIT`).
+  - Información de ubicación física en el código fuente (`lineno`, `col_offset`, rutas de archivos).
+  - Cadenas textuales de atributos o etiquetas de argumentos por palabra clave no normalizados,
+    evitando filtración de nombres originales al serializar.
+
+### Determinismo e inmutabilidad
+
+La serialización es estrictamente determinista: procesar el mismo árbol o dos árboles
+estructuralmente equivalentes produce secuencias de tokens idénticas, con el mismo orden y
+longitud. `serializar_ast()` es una operación de solo lectura; no modifica, reemplaza ni
+agrega atributos al AST recibido.
+
+### Limitaciones de la linealización lineal
+
+Aplanar un árbol bidimensional a una secuencia lineal 1D mediante pre-order presenta
+una limitación teórica conocida: en árboles de aridad variable sin marcadores de cierre
+(como paréntesis o tokens `End`), ciertas estructuras diferentes podrían teóricamente
+producir la misma secuencia. 
+
+Sin embargo, para el AST de Python, la mayoría de los nodos poseen una aridad fija y roles
+claramente delimitados (por ejemplo, `BinOp` contiene siempre operando izquierdo, operador y
+operando derecho; `Return` contiene una expresión; etc.), y los bloques con múltiples
+instrucciones son secuencias contenidas en listas de nodos (`body`). 
+Se decidió no introducir tokens de cierre (`EndNode`) para mantener las secuencias limpias,
+concisas y directamente preparadas para la posterior extracción de n-gramas sin ruido
+artificial.
 
 ## Decisiones pendientes
 
@@ -154,13 +208,10 @@ ejemplos reales sin implementar serialización ni búsqueda.
   la elección. Si se elige Jaccard, definir el tamaño de los n-gramas.
 - **Umbral:** elegir un valor configurable con evidencia de casos positivos y
   negativos; no hay un valor establecido.
-- **Representación:** definir el formato exacto de tokens y límites estructurales;
-  los metadatos ya se conservan mediante `FuncionExtraida` y el AST se copia antes
-  de normalizar.
-- **CLI y alcance futuro:** definir resolución de nombres ambiguos y evaluar si
-  se requieren exclusiones configurables de directorios.
-- **Validación posterior:** incorporar casos de renombrado, reordenamiento de
-  líneas y funciones diferentes, y evaluar cómo responde la métrica elegida.
+- **Buscador y CLI:** implementar ranking de las K mejores coincidencias y CLI con
+  `argparse`.
+- **Validación posterior:** incorporar casos de prueba de renombrado, reordenamiento
+  de líneas y funciones diferentes, evaluando la respuesta de la métrica.
 
-Estas decisiones se resolverán en etapas posteriores; la extracción y la
-normalización están implementadas en esta entrega.
+Estas decisiones se resolverán en etapas posteriores; la extracción, normalización y
+serialización están implementadas en esta entrega.
