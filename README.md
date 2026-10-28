@@ -166,8 +166,9 @@ LenguajesFormalesYAutomatas/
 │   ├── serializador.py            # Recorrido pre-order y generación determinista de tokens
 │   ├── similitud.py               # N-gramas y coeficiente de similitud de Jaccard
 │   └── buscador.py                # Coordinador de búsqueda, resolución y ranking Top-K
-├── tests/                         # Suite completa de pruebas con pytest
+├── tests/                         # Suite completa de pruebas con pytest (124 tests)
 │   ├── __init__.py
+│   ├── test_casos_tp.py           # 4 casos de integración del TP (2 positivos, 2 negativos)
 │   ├── test_extractor.py          # Pruebas de extracción y manejo de errores (18 tests)
 │   ├── test_normalizador.py       # Pruebas de transformación AST e inmutabilidad (26 tests)
 │   ├── test_serializador.py       # Pruebas de recorrido pre-order y tokens (15 tests)
@@ -187,10 +188,16 @@ LenguajesFormalesYAutomatas/
 
 ## 6. Ejecución de Pruebas Automatizadas
 
-Para ejecutar la suite completa de pruebas unitarias (120 tests en total):
+Para ejecutar la suite completa de pruebas unitarias (124 tests en total):
 
 ```powershell
 python -m pytest -v
+```
+
+Para ejecutar los 4 casos de integración solicitados en el enunciado:
+
+```powershell
+python -m pytest tests/test_casos_tp.py -v
 ```
 
 Para ejecutar pruebas de un módulo específico:
