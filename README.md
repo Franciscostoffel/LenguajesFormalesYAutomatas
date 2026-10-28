@@ -25,7 +25,8 @@ de identificadores y literales → recorrido pre-order y secuencias de tokens �
 comparación estructural → resultados ordenados para la función consultada.
 
 Los tokens de esta serialización serán una representación del AST, no los tokens
-léxicos del código fuente. La métrica de similitud todavía no fue elegida.
+léxicos del código fuente. La métrica utilizada es el coeficiente de Jaccard
+sobre trigramas ($n=3$) de tokens.
 
 ## Estructura
 
@@ -83,7 +84,7 @@ desde la raíz permite importar los módulos sin instalar el proyecto.
 
 ## Estado actual
 
-Etapa 4: extractor, normalizador y serializador implementados.
+Etapa 5: extractor, normalizador, serializador y métrica de similitud implementados.
 
 ### 1. Extractor (`motor_ast/extractor.py`)
 Encuentra archivos `.py` recursivamente, los ordena por ruta relativa y extrae funciones
@@ -121,6 +122,17 @@ Para ver la demostración del serializador:
 python -m motor_ast.serializador
 ```
 
+### 4. Métrica de Similitud (`motor_ast/similitud.py`)
+Calcula la similitud de Jaccard sobre conjuntos de n-gramas de tokens (por defecto $n=3$,
+trigramas). Permite clasificar funciones como candidatas a duplicado cuando su score
+alcanza o supera el umbral configurable (por defecto $0.75$, $75\%$).
+
+Para ver la demostración de la métrica de similitud:
+
+```powershell
+python -m motor_ast.similitud
+```
+
 ### Pruebas automatizadas
 
 Para ejecutar todas las pruebas unitarias:
@@ -129,6 +141,6 @@ Para ejecutar todas las pruebas unitarias:
 python -m pytest -v
 ```
 
-La similitud, búsqueda y CLI definitiva **no están implementadas**.
+El buscador y la CLI definitiva **no están implementados**.
 Ejecutar `buscar_similares.py` todavía no realiza una búsqueda.
 Las decisiones pendientes están en [docs/decisiones_diseno.md](docs/decisiones_diseno.md).

@@ -1,12 +1,12 @@
-# Decisiones de diseño — etapa 4
+# Decisiones de diseño — etapa 5
 
 ## Arquitectura propuesta
 
 Se separan las responsabilidades en módulos pequeños del paquete `motor_ast`.
 La CLI quedará en la raíz y delegará el trabajo al paquete. Esta división facilita
 comprender, probar y explicar cada transformación durante la defensa del trabajo.
-El extractor, el normalizador y el serializador están implementados; los demás
-módulos documentan sus responsabilidades futuras.
+El extractor, el normalizador, el serializador y la métrica de similitud están
+implementados; el buscador y la CLI documentan sus responsabilidades futuras.
 
 | Archivo | Responsabilidad prevista |
 | --- | --- |
@@ -202,16 +202,73 @@ Se decidió no introducir tokens de cierre (`EndNode`) para mantener las secuenc
 concisas y directamente preparadas para la posterior extracción de n-gramas sin ruido
 artificial.
 
+## Similitud implementada
+
+### Justificación de Jaccard sobre n-gramas
+
+Se implementó el coeficiente de similitud de Jaccard calculado sobre conjuntos de
+n-gramas de tokens. Sus principales fundamentos son:
+
+1. **Sencillez matemática e interpretabilidad:** El coeficiente $J(A, B) = |A \cap B| / |A \cup B|$
+   está naturalmente acotado en el intervalo $[0.0, 1.0]$ ($0\%$ a $100\%$), lo que
+   facilita definir umbrales claros y comprensibles.
+2. **Eficiencia computacional:** Las operaciones de conjuntos (intersección y unión de
+   hashes) operan en tiempo promedio lineal $O(|A| + |B|)$, resultando mucho más rápidas
+   que los enfoques de programación dinámica como Levenshtein ($O(|A| \cdot |B|)$)
+   al comparar decenas o cientos de funciones.
+3. **Tolerancia a variaciones locales:** Permite capturar similitud sintáctica global
+   incluso cuando existen inserciones o ligeras modificaciones en partes puntuales
+   de la función.
+
+### Por qué utilizar n-gramas (en lugar de tokens aislados)
+
+Comparar conjuntos de tokens individuales (bolsa de tokens / *bag of words*) destruiría
+por completo el orden sintáctico. Dos funciones con exactamente las mismas operaciones
+pero en orden inverso (o con las asignaciones y retornos permutados) tendrían una
+similitud del 100% con tokens aislados.
+
+El uso de **n-gramas** (subsecuencias de $n$ tokens consecutivos) conserva el **contexto
+sintáctico local**: exige que los tokens aparezcan contiguos y en el orden estructural
+correcto (por ejemplo, `("BinOp", "Name:VAR1", "Add")`).
+
+### Elección de n (trigramas, n=3)
+
+Se evaluó experimentalmente el impacto de $n \in \{2, 3, 4\}$ sobre las funciones de prueba:
+
+| Comparación | n=2 (bigramas) | n=3 (trigramas) | n=4 (cuatrigramas) |
+| --- | :---: | :---: | :---: |
+| `sumar_elementos` vs `acumular_valores` (clones) | 100.00% | **100.00%** | 100.00% |
+| Líneas independientes reordenadas (positivo) | 100.00% | **80.95%** | 65.22% |
+| `sumar_elementos` vs `calcular_factorial` (distintas) | 39.58% | **20.34%** | 11.11% |
+| `sumar_elementos` vs `es_par` (distintas) | 18.92% | **4.76%** | 0.00% |
+| `es_par` vs `calcular_factorial` (distintas) | 18.75% | **11.32%** | 7.55% |
+
+**Conclusiones de la comparativa:**
+- **$n=2$ (bigramas):** Demasiado tolerante. Una función distinta como `factorial` comparte casi un 40% de bigramas con `sumar`, reduciendo el margen de separación.
+- **$n=4$ (cuatrigramas):** Demasiado rígido. Penaliza excesivamente cualquier pequeña variación o reordenamiento (el caso positivo reordenado cae al 65%, por debajo del umbral), y en funciones muy breves produce muy pocos n-gramas.
+- **$n=3$ (trigramas - Seleccionado):** Ofrece el punto de equilibrio óptimo. Mantiene las funciones distintas por debajo del 21% y los casos similares por encima del 80%, logrando una clara separación entre positivos y negativos.
+
+### Elección y justificación del umbral (0.75 / 75%)
+
+Se definió un umbral por defecto de **$0.75$ ($75\%$)**:
+
+- Los casos positivos (clones directos por renombrado) alcanzan el **100%**.
+- Los casos positivos con reordenamientos locales leves superan el **80%**.
+- Los casos negativos (funciones con distinta estructura sintáctica) quedan todos por debajo del **21%**.
+- El umbral de 0.75 proporciona una **zona de seguridad amplia** (entre 21% y 75%) que minimiza drásticamente tanto falsos positivos como falsos negativos.
+
+Superar el umbral clasifica a las funciones como **"candidatas a duplicado"**, pero **no constituye prueba de equivalencia semántica**, ya que dos funciones pueden compartir estructura sintáctica realizando tareas distintas.
+
+### Limitaciones de la métrica
+
+1. **Ignora frecuencias de repetición:** Al convertir los n-gramas a un conjunto (`set`), si un patrón de 3 tokens se repite 10 veces en una función y 1 vez en otra, el conjunto lo cuenta como uno solo.
+2. **Sensibilidad a reordenamientos mayores:** Intercambiar bloques grandes de código quiebra los n-gramas en las fronteras de los bloques, reduciendo el score.
+3. **No detecta clones de tipo 4 (semánticos):** Dos funciones que resuelven el mismo problema con algoritmos completamente distintos (por ejemplo, ordenamiento burbuja vs quicksort, o cálculo iterativo vs fórmula matemática cerrada) tendrán estructuras AST disjuntas y su similitud de Jaccard será cercana a 0.
+4. **Dependencia del pipeline previo:** La calidad del score de Jaccard está supeditada a que la extracción, normalización y serialización hayan homogeneizado adecuadamente los identificadores y literales.
+
 ## Decisiones pendientes
 
-- **Métrica:** evaluar Jaccard sobre n-gramas y Levenshtein normalizada; justificar
-  la elección. Si se elige Jaccard, definir el tamaño de los n-gramas.
-- **Umbral:** elegir un valor configurable con evidencia de casos positivos y
-  negativos; no hay un valor establecido.
-- **Buscador y CLI:** implementar ranking de las K mejores coincidencias y CLI con
-  `argparse`.
-- **Validación posterior:** incorporar casos de prueba de renombrado, reordenamiento
-  de líneas y funciones diferentes, evaluando la respuesta de la métrica.
+- **Buscador y CLI:** orquestar la comparación todos-contra-todos ($O(n^2)$) o contra una función objetivo, implementar el ordenamiento Top-K y diseñar la CLI con `argparse`.
 
-Estas decisiones se resolverán en etapas posteriores; la extracción, normalización y
-serialización están implementadas en esta entrega.
+Estas decisiones se resolverán en la etapa posterior; la extracción, normalización,
+serialización y métrica de similitud están implementadas en esta entrega.
