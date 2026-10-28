@@ -83,7 +83,7 @@ desde la raíz permite importar los módulos sin instalar el proyecto.
 
 ## Estado actual
 
-Etapa 2: extractor implementado en `motor_ast/extractor.py`, con pruebas en
+Etapa 3: extractor implementado en `motor_ast/extractor.py`, con pruebas en
 `tests/test_extractor.py`. Encuentra archivos `.py` recursivamente, los ordena por
 ruta relativa y extrae funciones normales, asíncronas, anidadas y métodos de clases
 en orden de línea. Cada `FuncionExtraida` conserva nombre, ruta, línea y nodo AST
@@ -112,6 +112,43 @@ Para ejecutar solo las pruebas del extractor:
 python -m pytest tests/test_extractor.py -v
 ```
 
-La normalización, serialización, similitud, búsqueda y CLI definitiva **no están
-implementadas**. Ejecutar `buscar_similares.py` todavía no realiza una búsqueda.
+La normalización está implementada en `motor_ast/normalizador.py`:
+
+```python
+import ast
+from motor_ast.extractor import extraer_funciones_directorio
+from motor_ast.normalizador import normalizar_ast
+
+funcion = extraer_funciones_directorio("ejemplos")[0]
+normalizado = normalizar_ast(funcion.nodo_ast)
+print(ast.unparse(normalizado))
+print(ast.dump(normalizado, indent=4, include_attributes=False))
+```
+
+`normalizar_ast()` devuelve una copia independiente, fija el nombre raíz en
+`FUNC`, reemplaza nombres simples por `VAR1`, `VAR2`, etc., y números y cadenas
+por el string `LIT` dentro de nodos `Constant`. Los parámetros se registran primero;
+los demás nombres siguen el orden de visita. Conserva operadores, estructuras y
+atributos como `.metodo`. Reinicia el diccionario en cada llamada.
+
+Se usa un mapa compartido con las funciones anidadas: no distingue el sombreado
+de variables ni resuelve alcances, imports o declaraciones `global`/`nonlocal`.
+Los nombres externos y builtins también se normalizan. El AST resultante sirve
+para análisis estructural; no se debe ejecutar. Consultá las limitaciones en el
+documento de diseño.
+
+Para ver código original, código normalizado y AST de los ejemplos:
+
+```powershell
+.\.venv\Scripts\python.exe -m motor_ast.normalizador
+```
+
+Para ejecutar las pruebas de normalización y extracción:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_normalizador.py tests/test_extractor.py -v
+```
+
+La serialización, similitud, búsqueda y CLI definitiva **no están implementadas**.
+Ejecutar `buscar_similares.py` todavía no realiza una búsqueda.
 Las decisiones pendientes están en [docs/decisiones_diseno.md](docs/decisiones_diseno.md).
