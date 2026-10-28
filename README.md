@@ -83,11 +83,35 @@ desde la raíz permite importar los módulos sin instalar el proyecto.
 
 ## Estado actual
 
-Etapa 1: estructura base, docstrings de responsabilidades, ejemplos Python,
-documentación y una prueba de importación. Los demás archivos de pruebas están
-reservados para etapas posteriores y no contienen pruebas de algoritmos.
+Etapa 2: extractor implementado en `motor_ast/extractor.py`, con pruebas en
+`tests/test_extractor.py`. Encuentra archivos `.py` recursivamente, los ordena por
+ruta relativa y extrae funciones normales, asíncronas, anidadas y métodos de clases
+en orden de línea. Cada `FuncionExtraida` conserva nombre, ruta, línea y nodo AST
+original. No ejecuta el código ni modifica los archivos o sus árboles.
 
-La extracción, normalización, serialización, similitud, búsqueda y CLI **no están
+El lector respeta la declaración de codificación del archivo mediante
+`tokenize.open()`. Una ruta inexistente produce `FileNotFoundError` y una ruta que
+no sea carpeta, `NotADirectoryError`. Ante errores de lectura, codificación o
+sintaxis de un archivo, la extracción del directorio registra una advertencia con
+su ruta y el error, lo omite y continúa con los demás. Los resultados pueden ser
+parciales; si ningún archivo aporta funciones, devuelve una lista vacía.
+`parsear_archivo()` sigue propagando sus errores cuando se usa individualmente.
+No se excluyen carpetas en esta etapa; conviene
+seleccionar una carpeta de fuentes, sin entornos virtuales dentro.
+
+Para ejecutar la demostración real sobre `ejemplos/`, desde la raíz:
+
+```powershell
+python -m motor_ast.extractor
+```
+
+Muestra archivo, nombre, línea y tipo AST de cada función, y el total encontrado.
+Para ejecutar solo las pruebas del extractor:
+
+```powershell
+python -m pytest tests/test_extractor.py -v
+```
+
+La normalización, serialización, similitud, búsqueda y CLI definitiva **no están
 implementadas**. Ejecutar `buscar_similares.py` todavía no realiza una búsqueda.
-No se crearon automáticamente entornos virtuales ni se instalaron dependencias.
 Las decisiones pendientes están en [docs/decisiones_diseno.md](docs/decisiones_diseno.md).

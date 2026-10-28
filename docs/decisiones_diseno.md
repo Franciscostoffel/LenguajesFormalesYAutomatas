@@ -1,11 +1,12 @@
-# Decisiones de diseño — etapa 1
+# Decisiones de diseño — etapa 2
 
 ## Arquitectura propuesta
 
 Se separan las responsabilidades en módulos pequeños del paquete `motor_ast`.
 La CLI quedará en la raíz y delegará el trabajo al paquete. Esta división facilita
 comprender, probar y explicar cada transformación durante la defensa del trabajo.
-Por ahora, los módulos solo documentan sus responsabilidades futuras.
+El extractor ya está implementado; los demás módulos documentan sus
+responsabilidades futuras.
 
 | Archivo | Responsabilidad prevista |
 | --- | --- |
@@ -39,8 +40,33 @@ desde el AST no deben confundirse con los tokens del análisis léxico.
 - Proponer Python 3.10 o superior como base del entorno.
 - Usar pytest para pruebas incrementales y evitar dependencias innecesarias.
 - Conservar el `.gitignore` existente, que ya contempla Python, entornos y pytest.
-- Verificar inicialmente solo la importación de módulos; aún no hay algoritmos
-  cuyo comportamiento se pueda probar.
+- Mantener la prueba inicial de importación y añadir pruebas reales del extractor
+  con archivos temporales.
+
+## Extracción implementada
+
+- `FuncionExtraida` es una dataclass con nombre, ruta, línea y nodo AST original.
+  No se copia ni transforma el nodo; la decisión de copiarlo para normalización
+  queda pendiente de esa etapa.
+- `encontrar_archivos_python()` usa `Path.rglob()` y ordena por ruta relativa para
+  obtener un procesamiento determinista. Valida que la ruta exista y sea carpeta.
+- `parsear_archivo()` usa `tokenize.open()` para respetar UTF-8, BOM o una
+  declaración de codificación Python, y `ast.parse()` para analizar sin ejecutar.
+- `extraer_funciones()` usa `ast.walk()` y filtra `FunctionDef` y
+  `AsyncFunctionDef`. Esto incluye métodos y funciones anidadas sin comparar
+  clases completas. Ordena los resultados por línea: `ast.walk()` por sí solo
+  no garantiza el orden textual de las funciones.
+- `extraer_funciones_directorio()` coordina las tres operaciones anteriores.
+- Los errores del directorio de entrada se propagan al llamador. Al procesar cada
+  archivo, los errores de lectura, codificación y sintaxis generan una advertencia
+  mediante `logging`, con ruta y detalle; se omite ese archivo y se continúa.
+  Así un archivo inválido no impide analizar los restantes y la omisión es visible.
+  El resultado puede ser parcial o vacío si no se extrae ninguna función.
+  `parsear_archivo()` mantiene la propagación de errores al usarse individualmente.
+- No se aplican exclusiones de carpetas. El directorio de entrada debe elegirse
+  teniendo en cuenta que también se analizarán sus subcarpetas.
+- `python -m motor_ast.extractor` ejecuta una demostración sobre `ejemplos/`.
+  La CLI definitiva se mantiene pendiente.
 
 ## Decisiones pendientes
 
@@ -52,12 +78,13 @@ desde el AST no deben confundirse con los tokens del análisis léxico.
   números y cadenas por `LIT` y evitar la influencia del nombre de la función.
 - **Umbral:** elegir un valor configurable con evidencia de casos positivos y
   negativos; no hay un valor establecido.
-- **Representación:** definir cómo conservar los metadatos, si copiar el AST antes
-  de transformarlo y el formato exacto de tokens y límites estructurales.
-- **Extracción y CLI:** definir soporte de funciones asíncronas, resolución de
-  nombres ambiguos, tratamiento de archivos inválidos y directorios excluidos.
+- **Representación:** definir si copiar el AST antes de transformarlo y el formato
+  exacto de tokens y límites estructurales; los metadatos ya se conservan mediante
+  `FuncionExtraida`.
+- **CLI y alcance futuro:** definir resolución de nombres ambiguos y evaluar si
+  se requieren exclusiones configurables de directorios.
 - **Validación posterior:** incorporar casos de renombrado, reordenamiento de
   líneas y funciones diferentes, y evaluar cómo responde la métrica elegida.
 
-Estas decisiones se resolverán en etapas posteriores; no hay algoritmos ni
-interfaz CLI implementados en esta entrega.
+Estas decisiones se resolverán en etapas posteriores; solo la extracción está
+implementada en esta entrega.
