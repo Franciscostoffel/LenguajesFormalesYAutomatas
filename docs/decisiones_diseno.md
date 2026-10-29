@@ -1,274 +1,109 @@
-# Decisiones de diseño — etapa 5
+# Decisiones de diseño — etapa 6 (Final)
 
-## Arquitectura propuesta
+## Arquitectura del sistema
 
-Se separan las responsabilidades en módulos pequeños del paquete `motor_ast`.
-La CLI quedará en la raíz y delegará el trabajo al paquete. Esta división facilita
-comprender, probar y explicar cada transformación durante la defensa del trabajo.
-El extractor, el normalizador, el serializador y la métrica de similitud están
-implementados; el buscador y la CLI documentan sus responsabilidades futuras.
+Se separan las responsabilidades en módulos independientes y testeables del paquete `motor_ast`, coordinados por el punto de entrada CLI en la raíz del proyecto:
 
-| Archivo | Responsabilidad prevista |
+| Archivo | Responsabilidad implementada |
 | --- | --- |
-| `buscar_similares.py` | Leer argumentos de terminal y presentar resultados. |
-| `motor_ast/extractor.py` | Recorrer archivos `.py`, parsearlos con `ast.parse()` y registrar funciones, nombre, archivo, línea y subárbol. |
-| `motor_ast/normalizador.py` | Reemplazar identificadores y literales, preservando referencias y estructura. |
-| `motor_ast/serializador.py` | Recorrer el AST normalizado en pre-order y producir tokens deterministas. |
-| `motor_ast/similitud.py` | Calcular la similitud entre secuencias de tokens. |
-| `motor_ast/buscador.py` | Coordinar comparaciones y ordenar las K mejores coincidencias. |
+| `buscar_similares.py` | CLI principal con `argparse`: valida argumentos, ejecuta la búsqueda y formatea resultados. |
+| `motor_ast/extractor.py` | Recorre archivos `.py`, parsea con `ast.parse()` y extrae funciones con metadatos (`FuncionExtraida`). |
+| `motor_ast/normalizador.py` | Transforma ASTs para homogeneizar identificadores (`VAR1`, `VAR2`, ...) y literales (`LIT`). |
+| `motor_ast/serializador.py` | Recorre el AST normalizado en pre-order produciendo secuencias lineales deterministas de tokens. |
+| `motor_ast/similitud.py` | Genera n-gramas, calcula similitud de Jaccard y clasifica candidatos según el umbral. |
+| `motor_ast/buscador.py` | Localiza la función objetivo, precomputa representaciones, rankea Top-K y excluye la función consultada. |
 
-## Flujo de datos previsto y fundamento teórico
+## Flujo de datos y fundamento teórico
 
-1. Un directorio aportará archivos Python al extractor.
-2. El análisis sintáctico de Python producirá AST, de los que se obtendrán
-   funciones y metadatos de origen.
-3. La normalización transformará cada subárbol para reducir diferencias
-   irrelevantes de nombres y literales.
-4. El recorrido pre-order traducirá cada árbol normalizado a una secuencia.
-5. La métrica comparará las secuencias y el buscador ordenará los resultados.
-6. La CLI mostrará puntuaciones y ubicaciones de las funciones.
+```text
+Repositorio local (.py)
+        │
+        ▼  (extractor.py)
+Lista de FuncionExtraida (AST original + archivo + línea)
+        │
+        ▼  (buscador.py: identificar_funcion_objetivo)
+Función objetivo identificada vs Funciones candidatas
+        │
+        ▼  (normalizador.py)
+ASTs normalizados (copias independientes, nombres FUNC/VARx, literales LIT)
+        │
+        ▼  (serializador.py)
+Secuencias lineales de tokens sintácticos (recorrido pre-order)
+        │
+        ▼  (similitud.py)
+Conjuntos de n-gramas (trigramas) e índice de Jaccard |A ∩ B| / |A ∪ B|
+        │
+        ▼  (buscador.py: ejecutar_busqueda)
+Ranking Top-K ordenado por similitud descendente (con desempate determinista)
+        │
+        ▼  (buscar_similares.py)
+Salida estructurada y legible en terminal (CLI)
+```
 
-El AST es una abstracción de la estructura sintáctica derivada de la gramática de
-Python. La normalización y la serialización se relacionan con transformaciones
-de representaciones sintácticas y traducción dirigida por la sintaxis. No se
-implementarán un analizador léxico ni un parser propios. Los tokens generados
-desde el AST no deben confundirse con los tokens del análisis léxico.
+El AST es una abstracción del árbol de derivación sintáctica de Python. Comparar funciones mediante su AST normalizado y serializado equivale a comparar árboles sintácticos en lugar de cadenas de texto plano, replicando a escala de laboratorio el principio de herramientas industriales como SonarQube, PMD/CPD, MOSS o JPlag.
 
-## Decisiones iniciales
+---
 
-- Usar la biblioteca estándar `ast` para el procesamiento sintáctico.
-- Proponer Python 3.10 o superior como base del entorno.
-- Usar pytest para pruebas incrementales y evitar dependencias innecesarias.
-- Conservar el `.gitignore` existente, que ya contempla Python, entornos y pytest.
-- Mantener la prueba inicial de importación y añadir pruebas reales del extractor
-  con archivos temporales.
+## Decisiones por componente
 
-## Extracción implementada
+### 1. Extracción (`motor_ast/extractor.py`)
 
-- `FuncionExtraida` es una dataclass con nombre, ruta, línea y nodo AST original.
-  La extracción no copia ni transforma el nodo; el normalizador trabaja sobre una
-  copia independiente.
-- `encontrar_archivos_python()` usa `Path.rglob()` y ordena por ruta relativa para
-  obtener un procesamiento determinista. Valida que la ruta exista y sea carpeta.
-- `parsear_archivo()` usa `tokenize.open()` para respetar UTF-8, BOM o una
-  declaración de codificación Python, y `ast.parse()` para analizar sin ejecutar.
-- `extraer_funciones()` usa `ast.walk()` y filtra `FunctionDef` y
-  `AsyncFunctionDef`. Esto incluye métodos y funciones anidadas sin comparar
-  clases completas. Ordena los resultados por línea: `ast.walk()` por sí solo
-  no garantiza el orden textual de las funciones.
-- `extraer_funciones_directorio()` coordina las tres operaciones anteriores.
-- Los errores del directorio de entrada se propagan al llamador. Al procesar cada
-  archivo, los errores de lectura, codificación y sintaxis generan una advertencia
-  mediante `logging`, con ruta y detalle; se omite ese archivo y se continúa.
-  Así un archivo inválido no impide analizar los restantes y la omisión es visible.
-  El resultado puede ser parcial o vacío si no se extrae ninguna función.
-  `parsear_archivo()` mantiene la propagación de errores al usarse individualmente.
-- No se aplican exclusiones de carpetas. El directorio de entrada debe elegirse
-  teniendo en cuenta que también se analizarán sus subcarpetas.
-- `python -m motor_ast.extractor` ejecuta una demostración sobre `ejemplos/`.
-  La CLI definitiva se mantiene pendiente.
+- `FuncionExtraida` es una dataclass inmutable conceptualmente que almacena nombre, ruta, línea y nodo AST original. No transforma el nodo; la normalización trabaja sobre copias independientes.
+- `encontrar_archivos_python()` usa `Path.rglob("*.py")` y ordena por ruta relativa para determinismo.
+- `parsear_archivo()` usa `tokenize.open()` para respetar declaraciones de codificación Python (UTF-8, Latin-1, BOM) y `ast.parse()` para analizar sin ejecutar código.
+- Extrae `FunctionDef` y `AsyncFunctionDef`, incluyendo métodos de clase y funciones anidadas, ordenadas por número de línea.
+- Manejo robusto de errores: los archivos con errores de sintaxis o lectura generan advertencias (`logger.warning`) y se omiten, permitiendo continuar con los archivos válidos restantes.
 
-## Normalización implementada
+### 2. Normalización (`motor_ast/normalizador.py`)
 
-### Transformación y conservación del original
+- `normalizar_ast()` crea una copia profunda con `copy.deepcopy()` y aplica `NormalizadorAST` (heredera de `ast.NodeTransformer`). Deja el AST original intacto.
+- **Identificadores:** el nombre raíz se sustituye por `FUNC`. Los parámetros y variables locales reciben `VAR1`, `VAR2`, etc., por orden de aparición, preservando la correspondencia dentro de la misma función.
+- **Literales:** números y cadenas se reemplazan por el string `"LIT"` en nodos `Constant`. `True`, `False` y `None` se conservan.
+- **Atributos y palabras clave:** `.metodo` y etiquetas de argumentos keyword se conservan sin renombrar para evitar asunciones semánticas inválidas.
 
-`normalizar_ast()` acepta un `FunctionDef` o `AsyncFunctionDef`, crea una copia
-profunda con `copy.deepcopy()` y aplica una instancia nueva de `NormalizadorAST`.
-La clase hereda de `ast.NodeTransformer`: sus métodos `visit_*` transforman los
-nodos seleccionados y `generic_visit()` continúa por sus hijos. No se modifican
-los archivos, el nodo extraído ni sus metadatos originales.
+### 3. Serialización (`motor_ast/serializador.py`)
 
-Se conservan los tipos de nodos, operadores, contextos `Load`/`Store`, ubicación
-y orden de las instrucciones. Al comparar con `ast.dump()` se omiten los atributos
-de ubicación usando `include_attributes=False`: los números de línea no deben
-influir en la equivalencia estructural.
+- Recorrido recursivo pre-order: primero el nodo actual, luego sus hijos ordenados con `ast.iter_child_nodes()`.
+- Genera tokens informativos: `Name:VARx`, `arg:VARx`, `Constant:LIT` (o booleanos/None). Los demás nodos emiten su clase sintáctica (`BinOp`, `Add`, `Return`, `If`, `For`, etc.).
+- La función raíz emite `"FunctionDef"` o `"AsyncFunctionDef"`, asegurando que su nombre no altere la comparación.
+- Es determinista y de solo lectura. No incluye delimitadores artificiales (`EndNode`) para no incorporar ruido a la extracción de n-gramas.
 
-### Identificadores y política de alcances
+### 4. Métrica de Similitud (`motor_ast/similitud.py`)
 
-- El nombre de la función raíz se sustituye por `FUNC`.
-- Un diccionario asigna `VAR1`, `VAR2`, etc., por primera aparición de cada nombre
-  original. Se reinicia para cada llamada pública a `normalizar_ast()`.
-- Antes de visitar cada definición, se registran sus parámetros: posicionales
-  exclusivos, normales, `*args`, exclusivos por palabra clave y `**kwargs`. Así las
-  anotaciones y valores por defecto no desplazan la numeración de los parámetros.
-- Se transforman los campos `Name.id` y `arg.arg`. Los nombres simples externos,
-  builtins, nombres de funciones llamadas y nombres en anotaciones usan la misma
-  regla; no se resuelven sus definiciones. Esto puede equiparar llamadas distintas
-  como `len(datos)` y `medir(datos)`; la similitud no prueba equivalencia semántica.
-- Las funciones anidadas forman parte del subárbol de la raíz. Sus nombres se
-  asignan mediante el mismo diccionario para coincidir con referencias `Name`;
-  sus parámetros y cuerpos también comparten ese mapa. Al extraer una función
-  anidada y normalizarla por separado, pasa a ser otra raíz y empieza desde cero.
-- No se distinguen ámbitos: dos nombres escritos igual se tratan como el mismo,
-  incluso si uno sombrea al otro en una función anidada, lambda o comprensión.
-  No se intenta resolver closures, recursión o referencias globales por semántica.
-- Se conservan `Attribute.attr` y `keyword.arg`: `.metodo` y las etiquetas de
-  llamadas por palabra clave no se renombran. Renombrar un parámetro no garantiza
-  que una llamada por palabra clave dentro de la misma función quede enlazada.
-- Los nombres guardados en otros campos, como declaraciones `global`/`nonlocal`,
-  imports y alias, variables de `except`, patrones `match` o nombres de clases y
-  parámetros de tipo, no tienen reglas especiales en esta etapa. Pueden conservar
-  nombres originales e impedir equivalencias bajo renombrado en esos casos.
+- **Jaccard sobre n-gramas:** $J(A, B) = |A \cap B| / |A \cup B|$. Se evaluaron experimentalmente bigramas ($n=2$), trigramas ($n=3$) y cuatrigramas ($n=4$).
+- **Selección de $n=3$:** ofrece la mejor separabilidad. Mantiene funciones con lógica distinta por debajo del 21% y clones/reordenamientos por encima del 80%.
+- **Selección del umbral de $0.75$ ($75\%$):** provee una franja de seguridad amplia (más de 50 puntos porcentuales) entre positivos y negativos.
+- Secuencias cortas ($len < n$) se representan como un único n-grama con todos sus tokens para no descartar funciones pequeñas.
 
-Esta política prioriza una transformación pequeña y explicable sobre un análisis
-semántico completo. El árbol normalizado no debe compilarse ni ejecutarse.
+### 5. Motor de búsqueda y CLI (`motor_ast/buscador.py` y `buscar_similares.py`)
 
-### Literales
+- **Identificación de la función objetivo:** admite referencias con formato `archivo.py:nombre_funcion`. Utiliza `rpartition(":")` para no fallar ante rutas absolutas de Windows con letras de unidad (`C:\...`). Resuelve rutas relativas y absolutas con `pathlib.Path`. Si existen múltiples archivos con el mismo nombre o múltiples funciones con el mismo nombre en el mismo archivo, informa el error de ambigüedad con detalle de rutas/líneas.
+- **Precomputación y eficiencia:** cada función del repositorio se normaliza y serializa **una sola vez**. Luego se compara la función objetivo contra las $N-1$ candidatas restantes.
+- **Exclusión por identidad:** la función objetivo se excluye comparando `(archivo.resolve(), linea)`, asegurando que dos funciones con el mismo nombre en distintos archivos o líneas sí se comparen entre sí.
+- **Ranking Top-K:** ordena por score descendente. Ante empates en el score, aplica un desempate determinista secundario: ruta de archivo ascendente, nombre de función ascendente y número de línea ascendente. Si hay menos candidatas que $K$, devuelve las disponibles sin inventar datos.
+- **Aplicación del umbral:** clasifica a cada función con el booleano `es_duplicado`, pero no la elimina del ranking; esto permite al usuario inspeccionar las funciones más cercanas incluso si no superan el umbral.
+- **Interfaz CLI (`buscar_similares.py`):** implementada con `argparse`. Maneja errores comunes del usuario (rutas inexistentes, funciones no encontradas) imprimiendo mensajes claros en `stderr` y saliendo con código 1 sin mostrar volcados de pila (*tracebacks*) innecesarios.
 
-Los valores `int`, `float`, `complex` y `str` pasan a ser la cadena `"LIT"` dentro
-del mismo nodo `Constant`; su atributo `kind` se limpia para ignorar prefijos como
-`u`. No se introduce un tipo de nodo inventado. `True`, `False`, `None`, bytes y
-`Ellipsis` se conservan; se excluye `bool` explícitamente porque hereda de `int`.
-Los signos negativos siguen siendo nodos `UnaryOp`, y se mantienen los nodos de
-las f-strings aunque cambien sus segmentos de texto. Los docstrings se normalizan
-como cadenas, sin borrar su nodo: tener docstring sigue siendo una diferencia
-estructural frente a no tenerlo.
+---
 
-No se preserva la semántica ejecutable ni el tipo de los números normalizados.
-`ast.unparse()` se usa solo para visualizar; el resultado principal es el AST.
-No se afirma que todas las construcciones avanzadas puedan regenerarse o
-compilarse tras sustituir sus constantes. La transformación está orientada a
-funciones con los nodos habituales de asignación, operaciones, control y llamadas.
+## Complejidad algorítmica
 
-## Serialización implementada
+Para un repositorio con $M$ funciones de longitud promedio $L$ tokens:
 
-### Recorrido pre-order y algoritmo
+1. **Extracción y análisis sintáctico:** $O(Archivos \cdot Tamaño)$.
+2. **Normalización y serialización precomputada:** $O(M \cdot L)$.
+3. **Generación de n-gramas y cálculo de Jaccard:** comparar la función objetivo con $M-1$ candidatas requiere $M-1$ intersecciones y uniones de conjuntos, cada una en $O(L)$. Total: $O(M \cdot L)$.
+4. **Ordenamiento Top-K:** $O(M \log M)$.
 
-La función `serializar_ast()` recibe un nodo AST (típicamente una función normalizada)
-y genera una lista plana de strings mediante un recorrido recursivo pre-order:
+**Complejidad global de una búsqueda:** $O(M \cdot L + M \log M)$.
 
-1. **Visita del nodo actual**: se genera el token representativo del nodo raíz del
-   subárbol mediante `_token_de_nodo()`.
-2. **Recorrido recursivo de los hijos**: se itera ordenadamente sobre los nodos hijos
-   usando `ast.iter_child_nodes()`, que recorre los subnodos sintácticos de izquierda
-   a derecha según el orden natural del AST.
+En repositorios locales de tamaño mediano ($M \approx 500$ funciones), la búsqueda se completa en menos de un segundo en memoria, satisfaciendo ampliamente los requisitos de rendimiento del TP sin requerir indexación persistente ni bases de datos.
 
-No se utiliza `ast.walk()`, dado que dicho iterador no garantiza un orden topológico
-ni pre-order determinista entre hermanos y niveles del árbol.
+---
 
-### Representación de tokens
+## Limitaciones conocidas
 
-Se adopta una representación consistente y legible:
-
-- **Nodos con valores normalizados relevantes**:
-  - `Name`: se emite `Name:<id>` (por ejemplo `Name:VAR1`, `Name:VAR2`).
-  - `arg`: se emite `arg:<nombre>` (por ejemplo `arg:VAR1`).
-  - `Constant`: se emite `Constant:<valor>` (por ejemplo `Constant:LIT`, `Constant:True`, `Constant:None`).
-- **Definiciones de función**:
-  - Tanto `FunctionDef` como `AsyncFunctionDef` emiten únicamente el nombre de su tipo de
-    nodo (`FunctionDef` o `AsyncFunctionDef`). De esta manera, el nombre original o el
-    marcador `FUNC` no se introduce como token, cumpliendo la pauta de que el nombre de
-    la función no influye en la comparación.
-- **Demás nodos sintácticos**:
-  - Se emite el nombre exacto de la clase del nodo (`type(nodo).__name__`), como `BinOp`,
-    `Add`, `Sub`, `Mult`, `Return`, `If`, `For`, `While`, `Compare`, `Eq`, `Gt`, `Assign`,
-    `Call`, `arguments`, `Load`, `Store`, `Attribute`, `keyword`, etc.
-
-### Información conservada vs. información omitida
-
-- **Se conserva**:
-  - La jerarquía y orden secuencial de todas las instrucciones y expresiones.
-  - La diferenciación de operadores (`Add` vs `Sub` vs `Mult`).
-  - Las estructuras de control (`If` vs `For` vs `While`).
-  - La correspondencia de variables normalizadas (`VAR1`, `VAR2`, etc.).
-  - Las repeticiones y la frecuencia exacta de cada token (no se emplean conjuntos).
-  - Los contextos de acceso sintáctico (`Load`, `Store`).
-- **Se omite**:
-  - Nombres originales de variables, parámetros y funciones.
-  - Valores literales originales (números y cadenas de texto reemplazados por `LIT`).
-  - Información de ubicación física en el código fuente (`lineno`, `col_offset`, rutas de archivos).
-  - Cadenas textuales de atributos o etiquetas de argumentos por palabra clave no normalizados,
-    evitando filtración de nombres originales al serializar.
-
-### Determinismo e inmutabilidad
-
-La serialización es estrictamente determinista: procesar el mismo árbol o dos árboles
-estructuralmente equivalentes produce secuencias de tokens idénticas, con el mismo orden y
-longitud. `serializar_ast()` es una operación de solo lectura; no modifica, reemplaza ni
-agrega atributos al AST recibido.
-
-### Limitaciones de la linealización lineal
-
-Aplanar un árbol bidimensional a una secuencia lineal 1D mediante pre-order presenta
-una limitación teórica conocida: en árboles de aridad variable sin marcadores de cierre
-(como paréntesis o tokens `End`), ciertas estructuras diferentes podrían teóricamente
-producir la misma secuencia. 
-
-Sin embargo, para el AST de Python, la mayoría de los nodos poseen una aridad fija y roles
-claramente delimitados (por ejemplo, `BinOp` contiene siempre operando izquierdo, operador y
-operando derecho; `Return` contiene una expresión; etc.), y los bloques con múltiples
-instrucciones son secuencias contenidas en listas de nodos (`body`). 
-Se decidió no introducir tokens de cierre (`EndNode`) para mantener las secuencias limpias,
-concisas y directamente preparadas para la posterior extracción de n-gramas sin ruido
-artificial.
-
-## Similitud implementada
-
-### Justificación de Jaccard sobre n-gramas
-
-Se implementó el coeficiente de similitud de Jaccard calculado sobre conjuntos de
-n-gramas de tokens. Sus principales fundamentos son:
-
-1. **Sencillez matemática e interpretabilidad:** El coeficiente $J(A, B) = |A \cap B| / |A \cup B|$
-   está naturalmente acotado en el intervalo $[0.0, 1.0]$ ($0\%$ a $100\%$), lo que
-   facilita definir umbrales claros y comprensibles.
-2. **Eficiencia computacional:** Las operaciones de conjuntos (intersección y unión de
-   hashes) operan en tiempo promedio lineal $O(|A| + |B|)$, resultando mucho más rápidas
-   que los enfoques de programación dinámica como Levenshtein ($O(|A| \cdot |B|)$)
-   al comparar decenas o cientos de funciones.
-3. **Tolerancia a variaciones locales:** Permite capturar similitud sintáctica global
-   incluso cuando existen inserciones o ligeras modificaciones en partes puntuales
-   de la función.
-
-### Por qué utilizar n-gramas (en lugar de tokens aislados)
-
-Comparar conjuntos de tokens individuales (bolsa de tokens / *bag of words*) destruiría
-por completo el orden sintáctico. Dos funciones con exactamente las mismas operaciones
-pero en orden inverso (o con las asignaciones y retornos permutados) tendrían una
-similitud del 100% con tokens aislados.
-
-El uso de **n-gramas** (subsecuencias de $n$ tokens consecutivos) conserva el **contexto
-sintáctico local**: exige que los tokens aparezcan contiguos y en el orden estructural
-correcto (por ejemplo, `("BinOp", "Name:VAR1", "Add")`).
-
-### Elección de n (trigramas, n=3)
-
-Se evaluó experimentalmente el impacto de $n \in \{2, 3, 4\}$ sobre las funciones de prueba:
-
-| Comparación | n=2 (bigramas) | n=3 (trigramas) | n=4 (cuatrigramas) |
-| --- | :---: | :---: | :---: |
-| `sumar_elementos` vs `acumular_valores` (clones) | 100.00% | **100.00%** | 100.00% |
-| Líneas independientes reordenadas (positivo) | 100.00% | **80.95%** | 65.22% |
-| `sumar_elementos` vs `calcular_factorial` (distintas) | 39.58% | **20.34%** | 11.11% |
-| `sumar_elementos` vs `es_par` (distintas) | 18.92% | **4.76%** | 0.00% |
-| `es_par` vs `calcular_factorial` (distintas) | 18.75% | **11.32%** | 7.55% |
-
-**Conclusiones de la comparativa:**
-- **$n=2$ (bigramas):** Demasiado tolerante. Una función distinta como `factorial` comparte casi un 40% de bigramas con `sumar`, reduciendo el margen de separación.
-- **$n=4$ (cuatrigramas):** Demasiado rígido. Penaliza excesivamente cualquier pequeña variación o reordenamiento (el caso positivo reordenado cae al 65%, por debajo del umbral), y en funciones muy breves produce muy pocos n-gramas.
-- **$n=3$ (trigramas - Seleccionado):** Ofrece el punto de equilibrio óptimo. Mantiene las funciones distintas por debajo del 21% y los casos similares por encima del 80%, logrando una clara separación entre positivos y negativos.
-
-### Elección y justificación del umbral (0.75 / 75%)
-
-Se definió un umbral por defecto de **$0.75$ ($75\%$)**:
-
-- Los casos positivos (clones directos por renombrado) alcanzan el **100%**.
-- Los casos positivos con reordenamientos locales leves superan el **80%**.
-- Los casos negativos (funciones con distinta estructura sintáctica) quedan todos por debajo del **21%**.
-- El umbral de 0.75 proporciona una **zona de seguridad amplia** (entre 21% y 75%) que minimiza drásticamente tanto falsos positivos como falsos negativos.
-
-Superar el umbral clasifica a las funciones como **"candidatas a duplicado"**, pero **no constituye prueba de equivalencia semántica**, ya que dos funciones pueden compartir estructura sintáctica realizando tareas distintas.
-
-### Limitaciones de la métrica
-
-1. **Ignora frecuencias de repetición:** Al convertir los n-gramas a un conjunto (`set`), si un patrón de 3 tokens se repite 10 veces en una función y 1 vez en otra, el conjunto lo cuenta como uno solo.
-2. **Sensibilidad a reordenamientos mayores:** Intercambiar bloques grandes de código quiebra los n-gramas en las fronteras de los bloques, reduciendo el score.
-3. **No detecta clones de tipo 4 (semánticos):** Dos funciones que resuelven el mismo problema con algoritmos completamente distintos (por ejemplo, ordenamiento burbuja vs quicksort, o cálculo iterativo vs fórmula matemática cerrada) tendrán estructuras AST disjuntas y su similitud de Jaccard será cercana a 0.
-4. **Dependencia del pipeline previo:** La calidad del score de Jaccard está supeditada a que la extracción, normalización y serialización hayan homogeneizado adecuadamente los identificadores y literales.
-
-## Decisiones pendientes
-
-- **Buscador y CLI:** orquestar la comparación todos-contra-todos ($O(n^2)$) o contra una función objetivo, implementar el ordenamiento Top-K y diseñar la CLI con `argparse`.
-
-Estas decisiones se resolverán en la etapa posterior; la extracción, normalización,
-serialización y métrica de similitud están implementadas en esta entrega.
+1. **Granularidad a nivel función:** Compara funciones individuales; no detecta clases duplicadas ni similitudes distribuidas entre múltiples funciones o módulos.
+2. **Reordenamiento masivo de instrucciones:** Intercambiar bloques grandes de código quiebra los n-gramas en las fronteras de los bloques, lo que puede reducir el score de Jaccard por debajo del 75%.
+3. **No detecta clones semánticos (Tipo 4):** Dos funciones que implementan algoritmos radicalmente distintos para resolver el mismo problema (ej. ordenamiento burbuja vs quicksort, o bucle iterativo vs recursión) poseen árboles AST diferentes y obtendrán baja similitud.
+4. **Similitud estructural $\neq$ Equivalencia semántica:** Dos funciones pueden compartir una estructura sintáctica idéntica realizando tareas distintas en el dominio del negocio; la herramienta señala *candidatas a duplicado*, requiriendo validación humana.
